@@ -124,6 +124,11 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
     private final String [] roleList = {"1224", "12345"};
 
     private final String [] groupList = {"4321", "54321"};
+
+    private RealmService realmService;
+    private UserRealm userRealm;
+    private AbstractUserStoreManager userStoreManager;
+
     @BeforeClass
     public void setUp() throws Exception {
 
@@ -165,6 +170,14 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
         populateH2Base(connection2, invitation2);
         populateH2Base(connection3, invitation3);
         populateH2Base(connection4, invitation4);
+
+        realmService = mock(RealmService.class);
+        userRealm = mock(UserRealm.class);
+        userStoreManager = mock(AbstractUserStoreManager.class);
+        UserInvitationMgtDataHolder.getInstance().setRealmService(realmService);
+        when(realmService.getTenantUserRealm(anyInt())).thenReturn(userRealm);
+        when(userRealm.getUserStoreManager()).thenReturn(userStoreManager);
+        when(userStoreManager.getSecondaryUserStoreManager(anyString())).thenReturn(userStoreManager);
     }
 
     private Role buildRoleInfo() {
@@ -202,13 +215,6 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
         OrganizationManager organizationManager = mock(OrganizationManager.class);
         UserInvitationMgtDataHolder.getInstance().setOrganizationManagerService(organizationManager);
         when(organizationManager.resolveTenantDomain(anyString())).thenReturn("carbon.super");
-
-        RealmService realmService = mock(RealmService.class);
-        UserInvitationMgtDataHolder.getInstance().setRealmService(realmService);
-        UserRealm userRealm = mock(UserRealm.class);
-        AbstractUserStoreManager userStoreManager = mock(AbstractUserStoreManager.class);
-        when(userRealm.getUserStoreManager()).thenReturn(userStoreManager);
-        when(realmService.getTenantUserRealm(anyInt())).thenReturn(userRealm);
 
         List<Invitation> invitationList = invitationCoreService.getInvitations(null);
         // Checking whether the size of the Invitation list is not empty.
@@ -306,14 +312,8 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
         invitation1.setUserRedirectUrl("https://localhost:8080/travel-manager-001/invitations/accept");
 
         OrganizationManager organizationManager = mock(OrganizationManager.class);
-        RealmService realmService = mock(RealmService.class);
-        UserRealm userRealm = mock(UserRealm.class);
-        AbstractUserStoreManager userStoreManager = mock(AbstractUserStoreManager.class);
 
         when(userStoreManager.isExistingUser("samson")).thenReturn(false);
-        when(userRealm.getUserStoreManager()).thenReturn(userStoreManager);
-        when(realmService.getTenantUserRealm(anyInt())).thenReturn(userRealm);
-        UserInvitationMgtDataHolder.getInstance().setRealmService(realmService);
         UserInvitationMgtDataHolder.getInstance().setOrganizationManagerService(organizationManager);
 
         List<String> ancestors = new ArrayList<>();
@@ -382,7 +382,6 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
         }
 
         OrganizationManager organizationManager = mock(OrganizationManager.class);
-        RealmService realmService = mock(RealmService.class);
 
         UserRealm userRealmSubOrg = mock(UserRealm.class);
         AbstractUserStoreManager userStoreManagerSubOrg = mock(AbstractUserStoreManager.class);
@@ -393,12 +392,12 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
         AbstractUserStoreManager userStoreManagerParentOrg = mock(AbstractUserStoreManager.class);
         mockParentOrgDetails(userStoreManagerParentOrg, userStoreQualifiedUsername, userId, userRealmParentOrg,
                 realmService, tenantDomainOfParentOrg, organizationManager, parentOrgId);
+        when(userStoreManagerParentOrg.getSecondaryUserStoreManager(anyString())).thenReturn(userStoreManagerParentOrg);
 
         OrganizationSharedUserUtil organizationSharedUserUtil = mock(OrganizationSharedUserUtil.class);
         when(organizationSharedUserUtil.getUserManagedOrganizationClaim(userStoreManagerSubOrg, userId)).thenReturn(
                 parentOrgId);
 
-        UserInvitationMgtDataHolder.getInstance().setRealmService(realmService);
         UserInvitationMgtDataHolder.getInstance().setOrganizationManagerService(organizationManager);
         List<String> ancestors = new ArrayList<>();
         ancestors.add(subOrgId);
@@ -522,6 +521,21 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
 
         // Assertion
         assertFalse(resultWithoutConsoleAccess);
+    }
+
+    @Test(priority = 13, expectedExceptions = UserInvitationMgtClientException.class,
+            expectedExceptionsMessageRegExp = ".*Invalid user store domain specified in the invitation.*")
+    public void testCreateInvitationWithInvalidUserStoreDomain() throws Exception {
+
+        InvitationDO invitation1 = new InvitationDO();
+        invitation1.setUserDomain("INVALID");
+        invitation1.setUserRedirectUrl("https://localhost:8080/travel-manager-001/invitations/accept");
+
+        OrganizationManager organizationManager = mock(OrganizationManager.class);
+        UserInvitationMgtDataHolder.getInstance().setOrganizationManagerService(organizationManager);
+        when(userStoreManager.getSecondaryUserStoreManager(invitation1.getUserDomain())).thenReturn(null);
+
+        invitationCoreService.createInvitations(invitation1);
     }
 
     private static void mockParentOrgDetails(AbstractUserStoreManager userStoreManagerParentOrg,
