@@ -18,19 +18,18 @@
 
 package org.wso2.carbon.identity.organization.user.invitation.management;
 
-import org.powermock.core.classloader.annotations.PrepareForTest;
-import org.powermock.modules.testng.PowerMockTestCase;
-import org.powermock.reflect.Whitebox;
+import org.mockito.MockedStatic;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 import org.wso2.carbon.base.CarbonBaseConstants;
 import org.wso2.carbon.context.PrivilegedCarbonContext;
-import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkConstants;
 import org.wso2.carbon.identity.core.util.IdentityDatabaseUtil;
 import org.wso2.carbon.identity.core.util.IdentityTenantUtil;
 import org.wso2.carbon.identity.core.util.IdentityUtil;
+import org.wso2.carbon.identity.event.event.Event;
+import org.wso2.carbon.identity.event.services.IdentityEventService;
 import org.wso2.carbon.identity.organization.management.organization.user.sharing.util.OrganizationSharedUserUtil;
 import org.wso2.carbon.identity.organization.management.service.OrganizationManager;
 import org.wso2.carbon.identity.organization.management.service.exception.OrganizationManagementException;
@@ -45,31 +44,28 @@ import org.wso2.carbon.identity.organization.user.invitation.management.models.I
 import org.wso2.carbon.identity.organization.user.invitation.management.models.InvitationResult;
 import org.wso2.carbon.identity.organization.user.invitation.management.models.RoleAssignments;
 import org.wso2.carbon.identity.organization.user.invitation.management.util.TestUtils;
+import org.wso2.carbon.identity.recovery.util.Utils;
 import org.wso2.carbon.identity.role.v2.mgt.core.RoleManagementService;
 import org.wso2.carbon.identity.role.v2.mgt.core.model.Role;
-import org.wso2.carbon.identity.role.v2.mgt.core.model.RoleBasicInfo;
 import org.wso2.carbon.user.api.UserRealm;
 import org.wso2.carbon.user.api.UserStoreException;
 import org.wso2.carbon.user.core.common.AbstractUserStoreManager;
-import org.wso2.carbon.user.core.common.Group;
 import org.wso2.carbon.user.core.service.RealmService;
-import org.wso2.carbon.user.core.util.UserCoreUtil;
 
 import java.nio.file.Paths;
 import java.sql.Connection;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.isA;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
-import static org.powermock.api.mockito.PowerMockito.mock;
-import static org.powermock.api.support.membermodification.MemberMatcher.method;
-import static org.powermock.api.support.membermodification.MemberModifier.stub;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
@@ -100,24 +96,11 @@ import static org.wso2.carbon.identity.organization.user.invitation.management.c
 import static org.wso2.carbon.identity.organization.user.invitation.management.constants.InvitationTestConstants.INV_04_INV_ORG_ID;
 import static org.wso2.carbon.identity.organization.user.invitation.management.constants.InvitationTestConstants.INV_04_UN;
 import static org.wso2.carbon.identity.organization.user.invitation.management.constants.InvitationTestConstants.INV_04_USER_ORG_ID;
-import static org.wso2.carbon.identity.organization.user.invitation.management.constants.InvitationTestConstants.USER_ID;
 import static org.wso2.carbon.identity.organization.user.invitation.management.util.TestUtils.closeH2Base;
 import static org.wso2.carbon.identity.organization.user.invitation.management.util.TestUtils.getConnection;
-import static org.wso2.carbon.user.core.UserCoreConstants.APPLICATION_DOMAIN;
-import static org.wso2.carbon.user.core.UserCoreConstants.INTERNAL_DOMAIN;
-import static org.wso2.carbon.user.core.UserCoreConstants.PRIMARY_DEFAULT_DOMAIN_NAME;
+import static org.wso2.carbon.identity.recovery.IdentityRecoveryConstants.ConnectorConfig.EMAIL_VERIFICATION_NOTIFICATION_INTERNALLY_MANAGE;
 
-@PrepareForTest({PrivilegedCarbonContext.class,
-        RoleManagementService.class,
-        IdentityDatabaseUtil.class,
-        UserInvitationMgtDataHolder.class,
-        IdentityTenantUtil.class,
-        UserInvitationMgtDataHolder.class,
-        IdentityUtil.class,
-        OrganizationSharedUserUtil.class,
-        UserCoreUtil.class,
-        InvitationCoreServiceImpl.class})
-public class InvitationCoreServiceImplTest extends PowerMockTestCase {
+public class InvitationCoreServiceImplTest {
 
     private final UserInvitationDAO userInvitationDAO = new UserInvitationDAOImpl();
     private InvitationCoreServiceImpl invitationCoreService;
@@ -128,6 +111,12 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
     private RealmService realmService;
     private UserRealm userRealm;
     private AbstractUserStoreManager userStoreManager;
+    private IdentityEventService identityEventService;
+
+    private MockedStatic<IdentityTenantUtil> identityTenantUtilMockedStatic;
+    private MockedStatic<IdentityUtil> identityUtilMockedStatic;
+    private MockedStatic<OrganizationSharedUserUtil> organizationSharedUserUtilMockedStatic;
+    private MockedStatic<Utils> utilsMockedStatic;
 
     @BeforeClass
     public void setUp() throws Exception {
@@ -136,15 +125,14 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
         TestUtils.initiateH2Base();
         setUpCarbonHome();
         mockCarbonContextForTenant();
-        mockStatic(IdentityTenantUtil.class);
         mockStatic(IdentityDatabaseUtil.class);
-        mockStatic(IdentityUtil.class);
-        mockStatic(OrganizationSharedUserUtil.class);
 
-        Connection connection1 = getConnection();
-        Connection connection2 = getConnection();
-        Connection connection3 = getConnection();
-        Connection connection4 = getConnection();
+        identityTenantUtilMockedStatic = mockStatic(IdentityTenantUtil.class);
+        identityUtilMockedStatic = mockStatic(IdentityUtil.class);
+        identityUtilMockedStatic.when(() -> IdentityUtil.getProperty(anyString())).thenReturn("1440");
+
+        organizationSharedUserUtilMockedStatic = mockStatic(OrganizationSharedUserUtil.class);
+        utilsMockedStatic = mockStatic(Utils.class);
 
         Invitation invitation1 = buildInvitation(INV_01_INVITATION_ID, INV_01_CONF_CODE, INV_01_UN,
                 "DEFAULT", INV_01_EMAIL,
@@ -166,18 +154,21 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
                 INV_04_INV_ORG_ID, new RoleAssignments[]{roleAssignments2}, new GroupAssignments[]{groupAssignments},
                 "PENDING");
 
-        populateH2Base(connection1, invitation1);
-        populateH2Base(connection2, invitation2);
-        populateH2Base(connection3, invitation3);
-        populateH2Base(connection4, invitation4);
+        storeParentUserInvitation(invitation1);
+        storeParentUserInvitation(invitation2);
+        storeParentUserInvitation(invitation3);
+        storeParentUserInvitation(invitation4);
 
         realmService = mock(RealmService.class);
         userRealm = mock(UserRealm.class);
         userStoreManager = mock(AbstractUserStoreManager.class);
+        identityEventService = mock(IdentityEventService.class);
         UserInvitationMgtDataHolder.getInstance().setRealmService(realmService);
+        UserInvitationMgtDataHolder.getInstance().setIdentityEventService(identityEventService);
         when(realmService.getTenantUserRealm(anyInt())).thenReturn(userRealm);
         when(userRealm.getUserStoreManager()).thenReturn(userStoreManager);
         when(userStoreManager.getSecondaryUserStoreManager(anyString())).thenReturn(userStoreManager);
+        doNothing().when(identityEventService).handleEvent(isA(Event.class));
     }
 
     private Role buildRoleInfo() {
@@ -323,8 +314,10 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
 
         when(IdentityDatabaseUtil.getDBConnection(false)).thenReturn(getConnection());
         when(IdentityDatabaseUtil.getDBConnection(true)).thenReturn(getConnection());
-        when(IdentityTenantUtil.getTenantId(anyString())).thenReturn(-1234);
-        mockIdentityTenantUtil();
+        identityTenantUtilMockedStatic.when(() -> IdentityTenantUtil.getTenantId(anyString())).thenReturn(-1234);
+        identityTenantUtilMockedStatic.when(() -> IdentityTenantUtil.getTenantDomain(anyInt()))
+                .thenReturn("carbon.super");
+
         List<InvitationResult> createdInvitation = invitationCoreService.createInvitations(invitation1);
         assertNotNull(createdInvitation);
         assertEquals(createdInvitation.get(0).getStatus(), "Failed");
@@ -335,22 +328,22 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
 
         return new Object[][]{
                 {
-                        true, "false", true, true
+                        true, "false", "true", true
                 },
                 {
-                        true, "false", false, true
+                        true, "false", "false", true
                 },
                 {
-                        true, "true", true, false
+                        false, null, "false", true
                 },
                 {
-                        true, "true", false, false
+                        true, "true", "false", false
                 },
                 {
-                        false, null, false, true
+                        true, "true", "true", false
                 },
                 {
-                        false, null, true, false
+                        false, null, "true", false
                 }
         };
     }
@@ -358,7 +351,7 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
     @Test(priority = 10, dataProvider = "testConfirmationCodeReturnOnInviteCreationDataProvider")
     public void testConfirmationCodeReturnOnInviteCreation(boolean setNotificationManagingProperty,
                                                            String propertyValue,
-                                                           boolean isNotificationManagedInternallyForOrg,
+                                                           String isNotificationManagedInternallyForOrg,
                                                            boolean isConfirmationCodeReturnInResponse)
             throws Exception {
 
@@ -394,9 +387,9 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
                 realmService, tenantDomainOfParentOrg, organizationManager, parentOrgId);
         when(userStoreManagerParentOrg.getSecondaryUserStoreManager(anyString())).thenReturn(userStoreManagerParentOrg);
 
-        OrganizationSharedUserUtil organizationSharedUserUtil = mock(OrganizationSharedUserUtil.class);
-        when(organizationSharedUserUtil.getUserManagedOrganizationClaim(userStoreManagerSubOrg, userId)).thenReturn(
-                parentOrgId);
+        organizationSharedUserUtilMockedStatic
+                .when(() -> OrganizationSharedUserUtil.getUserManagedOrganizationClaim(userStoreManagerSubOrg, userId))
+                .thenReturn(parentOrgId);
 
         UserInvitationMgtDataHolder.getInstance().setOrganizationManagerService(organizationManager);
         List<String> ancestors = new ArrayList<>();
@@ -406,121 +399,31 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
         when(organizationManager.getAncestorOrganizationIds(anyString())).thenReturn(ancestors);
         when(organizationManager.getParentOrganizationId(subOrgId)).thenReturn(parentOrgId);
 
-        stub(method(InvitationCoreServiceImpl.class, "isActiveInvitationAvailable",
-                String.class, String.class, String.class, String.class)).toReturn(false);
-        stub(method(InvitationCoreServiceImpl.class, "isUserExistAtInvitedOrganization",
-                String.class)).toReturn(false);
-        stub(method(InvitationCoreServiceImpl.class, "triggerInvitationAddNotification", Invitation.class))
-                .toReturn(true);
-        stub(method(InvitationCoreServiceImpl.class, "isNotificationsInternallyManagedForOrganization",
-                String.class)).toReturn(isNotificationManagedInternallyForOrg);
+        utilsMockedStatic.when(() -> Utils.getConnectorConfig(EMAIL_VERIFICATION_NOTIFICATION_INTERNALLY_MANAGE,
+                "carbon.super")).thenReturn(isNotificationManagedInternallyForOrg);
 
         when(IdentityDatabaseUtil.getDBConnection(true)).thenReturn(getConnection());
-        when(IdentityDatabaseUtil.getDBConnection(false)).thenReturn(getConnection());
+        when(IdentityDatabaseUtil.getDBConnection(false)).thenReturn(getConnection())
+                .thenReturn(getConnection());
 
         List<InvitationResult> createdInvitation = invitationCoreService.createInvitations(invitation);
         assertNotNull(createdInvitation);
         assertEquals(createdInvitation.get(0).getStatus(), "Successful");
+        Invitation storedInvitation;
         if (isConfirmationCodeReturnInResponse) {
             assertNotNull(createdInvitation.get(0).getConfirmationCode());
+            when(IdentityDatabaseUtil.getDBConnection(false)).thenReturn(getConnection())
+                    .thenReturn(getConnection());
+            storedInvitation = userInvitationDAO
+                    .getInvitationWithAssignmentsByConfirmationCode(createdInvitation.get(0).getConfirmationCode());
+        } else {
+            String invitedUsername = createdInvitation.get(0).getUsername();
+            when(IdentityDatabaseUtil.getDBConnection(false)).thenReturn(getConnection());
+            storedInvitation = userInvitationDAO.getActiveInvitationByUser(invitedUsername, "DEFAULT",
+                    parentOrgId, subOrgId);
         }
-    }
-
-    @Test(priority = 11)
-    public void testGetUserGroups() throws Exception {
-
-        // Mocking IdentityTenantUtil.getTenantId static method
-        when(IdentityTenantUtil.getTenantId(anyString())).thenReturn(1);
-
-        // Mocking the getAbstractUserStoreManager method
-        AbstractUserStoreManager userStoreManager = mock(AbstractUserStoreManager.class);
-        stub(method(InvitationCoreServiceImpl.class, "getAbstractUserStoreManager", int.class))
-                .toReturn(userStoreManager);
-
-        // Mocking the userStoreManager.getGroupListOfUser method
-        Group group1 = mock(Group.class);
-        Group group2 = mock(Group.class);
-        Group group3 = mock(Group.class);
-        when(group1.getGroupName()).thenReturn("Application/group1");
-        when(group2.getGroupName()).thenReturn("Internal/group2");
-        when(group3.getGroupName()).thenReturn("Primary/group3");
-        when(group1.getGroupID()).thenReturn("1");
-        when(group2.getGroupID()).thenReturn("2");
-        when(group3.getGroupID()).thenReturn("3");
-        List<Group> groups = Arrays.asList(group1, group2, group3);
-        when(userStoreManager.getGroupListOfUser(USER_ID, null, null)).thenReturn(groups);
-
-        // Mocking UserCoreUtil.extractDomainFromName
-        mockStatic(UserCoreUtil.class);
-        when(UserCoreUtil.extractDomainFromName("Application/group1")).thenReturn(APPLICATION_DOMAIN);
-        when(UserCoreUtil.extractDomainFromName("Internal/group2")).thenReturn(INTERNAL_DOMAIN);
-        when(UserCoreUtil.extractDomainFromName("Primary/group3"))
-                .thenReturn(PRIMARY_DEFAULT_DOMAIN_NAME);
-
-        // Invoking the method
-        List<String> resultUserGroups = Whitebox.invokeMethod(
-                invitationCoreService, "getUserGroups", USER_ID, CarbonBaseConstants.CARBON_HOME);
-
-        // Assertion
-        List<String> expectedUserGroups = Collections.singletonList("3");
-        assertEquals(resultUserGroups, expectedUserGroups);
-    }
-
-    @Test(priority = 12)
-    public void testIsInvitedUserHasConsoleAccess() throws Exception {
-
-        // Mocking Role List
-        RoleBasicInfo role1 = new RoleBasicInfo("1", "Role1");
-        RoleBasicInfo role2 = new RoleBasicInfo("2", "Role2");
-        RoleBasicInfo role3 = new RoleBasicInfo("3", "Role3");
-        RoleBasicInfo role4 = new RoleBasicInfo("4", "Role4");
-        role2.setAudienceName(FrameworkConstants.Application.CONSOLE_APP);
-        List<RoleBasicInfo> roleList = new ArrayList<>(Arrays.asList(role1, role2));
-
-        // Mocking Group List
-        List<String> groupList = Arrays.asList("groupID1", "groupID2");
-
-        // Mocking RoleManagementService getRoleListOfUser
-        RoleManagementService roleManagementService = mock(RoleManagementService.class);
-        stub(method(InvitationCoreServiceImpl.class, "getRoleManagementService"))
-                .toReturn(roleManagementService);
-        when(roleManagementService.getRoleListOfUser(USER_ID, CarbonBaseConstants.CARBON_HOME)).thenReturn(roleList);
-
-        // Stubbing getUserGroups Method
-        stub(method(InvitationCoreServiceImpl.class, "getUserGroups")).toReturn(groupList);
-
-        // Mocking RoleManagementService getRoleListOfGroups
-        List<RoleBasicInfo> roleListFromUserGroups = Arrays.asList(role3, role4);
-        when(roleManagementService.getRoleListOfGroups(groupList, CarbonBaseConstants.CARBON_HOME))
-                .thenReturn(roleListFromUserGroups);
-
-        // Invoke the method under test
-        boolean resultWithDirectConsoleAccess = Whitebox.invokeMethod(invitationCoreService,
-                "isInvitedUserHasConsoleAccess", USER_ID, CarbonBaseConstants.CARBON_HOME);
-
-        // Assertion
-        assertTrue(resultWithDirectConsoleAccess);
-
-        // Test case where user does inherit have console access via a group role
-        role2.setAudienceName("App1");
-        role4.setAudienceName(FrameworkConstants.Application.CONSOLE_APP);
-
-        // Re-invoke the method under test
-        Boolean resultWithConsoleAccessViaGroup = Whitebox.invokeMethod(invitationCoreService,
-                "isInvitedUserHasConsoleAccess", USER_ID, CarbonBaseConstants.CARBON_HOME);
-
-        // Assertion
-        assertTrue(resultWithConsoleAccessViaGroup);
-
-        // Test case where user does not have console access
-        role4.setAudienceName("App1");
-
-        // Re-invoke the method under test
-        Boolean resultWithoutConsoleAccess = Whitebox.invokeMethod(invitationCoreService,
-                "isInvitedUserHasConsoleAccess", USER_ID, CarbonBaseConstants.CARBON_HOME);
-
-        // Assertion
-        assertFalse(resultWithoutConsoleAccess);
+        when(IdentityDatabaseUtil.getDBConnection(true)).thenReturn(getConnection());
+        userInvitationDAO.deleteInvitation(storedInvitation.getInvitationId());
     }
 
     @Test(priority = 13, expectedExceptions = UserInvitationMgtClientException.class,
@@ -538,7 +441,7 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
         invitationCoreService.createInvitations(invitation1);
     }
 
-    private static void mockParentOrgDetails(AbstractUserStoreManager userStoreManagerParentOrg,
+    private void mockParentOrgDetails(AbstractUserStoreManager userStoreManagerParentOrg,
                                              String userStoreQualifiedUsername,
                                              String userId, UserRealm userRealmParentOrg, RealmService realmService,
                                              String tenantDomainOfParentOrg, OrganizationManager organizationManager,
@@ -552,12 +455,14 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
                 "alex@gmail.com");
         when(userRealmParentOrg.getUserStoreManager()).thenReturn(userStoreManagerParentOrg);
         when(realmService.getTenantUserRealm(1)).thenReturn(userRealmParentOrg);
-        when(IdentityTenantUtil.getTenantId(tenantDomainOfParentOrg)).thenReturn(1);
-        when(IdentityTenantUtil.getTenantDomain(1)).thenReturn(tenantDomainOfParentOrg);
+        identityTenantUtilMockedStatic.when(() -> IdentityTenantUtil.getTenantId(tenantDomainOfParentOrg))
+                .thenReturn(1);
+        identityTenantUtilMockedStatic.when(() -> IdentityTenantUtil.getTenantDomain(1))
+                .thenReturn(tenantDomainOfParentOrg);
         when(organizationManager.resolveTenantDomain(parentOrgId)).thenReturn(tenantDomainOfParentOrg);
     }
 
-    private static void mockSubOrgDetails(AbstractUserStoreManager userStoreManagerSubOrg,
+    private void mockSubOrgDetails(AbstractUserStoreManager userStoreManagerSubOrg,
                                           String userStoreQualifiedUsername,
                                           UserRealm userRealmSubOrg, RealmService realmService,
                                           String tenantDomainOfSubOrg,
@@ -567,8 +472,10 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
         when(userStoreManagerSubOrg.isExistingUser(userStoreQualifiedUsername)).thenReturn(false);
         when(userRealmSubOrg.getUserStoreManager()).thenReturn(userStoreManagerSubOrg);
         when(realmService.getTenantUserRealm(2)).thenReturn(userRealmSubOrg);
-        when(IdentityTenantUtil.getTenantId(tenantDomainOfSubOrg)).thenReturn(2);
-        when(IdentityTenantUtil.getTenantDomain(2)).thenReturn(tenantDomainOfSubOrg);
+        identityTenantUtilMockedStatic.when(() -> IdentityTenantUtil.getTenantId(tenantDomainOfSubOrg))
+                .thenReturn(2);
+        identityTenantUtilMockedStatic.when(() -> IdentityTenantUtil.getTenantDomain(2))
+                .thenReturn(tenantDomainOfSubOrg);
         when(organizationManager.resolveTenantDomain(subOrgId)).thenReturn(tenantDomainOfSubOrg);
     }
 
@@ -580,14 +487,9 @@ public class InvitationCoreServiceImplTest extends PowerMockTestCase {
                 "repository/conf").toString());
     }
 
-    private static void mockIdentityTenantUtil() {
+    private void storeParentUserInvitation(Invitation invitation) throws Exception {
 
-        when(IdentityTenantUtil.getTenantDomain(anyInt())).thenReturn("carbon.super");
-    }
-
-    private void populateH2Base(Connection connection, Invitation invitation) throws Exception {
-
-        when(IdentityDatabaseUtil.getDBConnection(anyBoolean())).thenReturn(connection);
+        when(IdentityDatabaseUtil.getDBConnection(true)).thenReturn(getConnection());
         when(IdentityUtil.getProperty(anyString())).thenReturn("1440");
         if (invitation.getRoleAssignments() != null) {
             for (RoleAssignments roleAssignments : invitation.getRoleAssignments()) {
